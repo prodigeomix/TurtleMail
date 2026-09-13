@@ -993,8 +993,6 @@ end
 --@param slot number
 function TurtleMail.sendmail_attached( bag, slot )
   if not m.api.MailFrame:IsVisible() then return false end
-  local texture = m.api.GetContainerItemInfo( bag, slot )
-  if not texture then return false end
 
   for i = 1, ATTACHMENTS_MAX do
     local btn = m.api[ "MailAttachment" .. i ]
