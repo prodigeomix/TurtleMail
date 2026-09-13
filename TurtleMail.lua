@@ -37,16 +37,18 @@ function TurtleMail:init()
 
   -- Register events
   self.update_frame:SetScript( "OnEvent", function() self[ event ]() end )
-  for _, event in { "ADDON_LOADED", "PLAYER_LOGIN", "UI_ERROR_MESSAGE", "CURSOR_UPDATE", "BAG_UPDATE", "MAIL_SHOW", "MAIL_CLOSED", "MAIL_SEND_SUCCESS", "MAIL_INBOX_UPDATE" } do
+  for _, event in { "ADDON_LOADED", "PLAYER_LOGIN", "UI_ERROR_MESSAGE", "CURSOR_UPDATE", "BAG_UPDATE", "MAIL_SHOW", "MAIL_CLOSED", "MAIL_SEND_SUCCESS", "MAIL_INBOX_UPDATE", "PLAYER_MONEY" } do
     self.update_frame:RegisterEvent( event )
   end
 
   -- Set default log settings
   m.api.TurtleMail_Log = {
+    Days = {},
     Sent = {},
     Received = {},
     Settings = {
       Enabled = false,
+      RetentionDays = 30,
       SentFilters = { Money = 1, COD = 1, Other = 1 },
       ReceivedFilters = { Money = 1, COD = 1, Other = 1, Returned = 1, AH = 1, AHSold = 1, AHOutbid = 1, AHWon = 1, AHCancelled = 1, AHExpired = 1 }
     }
@@ -65,8 +67,10 @@ function TurtleMail.slash_command( args )
   if args == "" or args == "help" then
     m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473TurtleMail " .. L[ "Help" ] .. "|r" )
     m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm log|r " .. L[ "Toggle logging on/off" ] )
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm prune [days]|r " .. L[ "Delete logs older than X days (default: 30)" ] )
     m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm clear sent|r " .. L[ "Clear sent log" ] )
     m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm clear received|r " .. L[ "Clear received log" ] )
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm clear all|r " .. L[ "Clear all mail logs" ] )
     m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm clear names|r " .. L[ "Clear saved recipient names from autocomplete" ] )
     return
   end
@@ -87,18 +91,26 @@ function TurtleMail.slash_command( args )
     m.log_enabled = m.api.TurtleMail_Log[ "Settings" ][ "Enabled" ]
   end
 
+  if string.find( args, "^prune" ) then
+    local _, _, days_str = string.find( args, "^prune%s*(%d*)$" )
+    local days = tonumber( days_str ) or 30
+    m.log.prune( days )
+    return
+  end
+
   if string.find( args, "^clear" ) then
     if args == "clear sent" then
-      m.info( L[ "Sent log cleared." ] )
-      m.api.TurtleMail_Log[ "Sent" ] = {}
+      m.log.clear( "Sent" )
     elseif args == "clear received" then
-      m.info( L[ "Received log cleared." ] )
-      m.api.TurtleMail_Log[ "Received" ] = {}
+      m.log.clear( "Received" )
+    elseif args == "clear all" then
+      m.log.clear( "All" )
     elseif args == "clear names" then
       m.info( L[ "Recipient autocomplete names have been cleared." ] )
       local key = m.api.GetCVar( "realmName" ) .. "|" .. m.api.UnitFactionGroup( "player" )
       m.api.TurtleMail_AutoCompleteNames[ key ] = {}
     end
+    return
   end
 
   if args == "debug" then
@@ -113,6 +125,26 @@ end
 
 function TurtleMail.on_update()
   if not m.api.MailFrame or not m.api.MailFrame:IsVisible() then return end
+
+  if m.sendmail_sending then
+    m.sendmail_timer = (m.sendmail_timer or 0) + 1
+    if m.sendmail_timer > 150 then
+      m.sendmail_abort()
+      m.info( L[ "Sending mail timed out. Cancelled." ] )
+    end
+  else
+    m.sendmail_timer = 0
+  end
+
+  if m.inbox_opening then
+    m.inbox_timer = (m.inbox_timer or 0) + 1
+    if m.inbox_timer > 200 then
+      m.inbox_abort()
+      m.info( L[ "Opening mail timed out." ] )
+    end
+  else
+    m.inbox_timer = 0
+  end
 
   if m._cursorItem then
     m.debug( "on_update: cursorItem" )
@@ -174,6 +206,17 @@ function TurtleMail.BAG_UPDATE()
   end
 end
 
+function TurtleMail.PLAYER_MONEY()
+  local current_money = m.api.GetMoney()
+  if m.last_player_money and m.api.MailFrame:IsVisible() then
+    local delta = current_money - m.last_player_money
+    if delta > 0 then
+      m.update_money( delta )
+    end
+  end
+  m.last_player_money = current_money
+end
+
 function TurtleMail.MAIL_SHOW()
   if m.api.TurtleMail_Point then
     m.debug( "Set point" )
@@ -201,35 +244,43 @@ function TurtleMail.MAIL_SHOW()
     m.api.MailFrameTab3:Hide()
   end
 
+  m.last_player_money = m.api.GetMoney()
   m.timer = 0
   m.money_received = 0
   m.update_money( 0 )
 end
 
 function TurtleMail.MAIL_CLOSED()
+  m.last_player_money = nil
   m.inbox_abort()
-  m.sendmail_sending = false
+  m.sendmail_abort()
   m.sendmail_clear()
 end
 
 function TurtleMail.UI_ERROR_MESSAGE()
   if m.inbox_opening then
-    if arg1 == m.api.ERR_INV_FULL then
-      m.inbox_abort()
-    elseif arg1 == m.api.ERR_ITEM_MAX_COUNT then
-      m.inbox_skip = true
+    if arg1 == m.api.ERR_INV_FULL or arg1 == m.api.ERR_MAIL_DATABASE_ERROR or arg1 == m.api.ERR_ITEM_MAX_COUNT then
+      if arg1 == m.api.ERR_ITEM_MAX_COUNT then
+        m.inbox_skip = true
+      else
+        m.inbox_abort()
+      end
     end
-  elseif m.sendmail_sending and (arg1 == m.api.ERR_MAIL_TO_SELF or arg1 == m.api.ERR_PLAYER_WRONG_FACTION or arg1 == m.api.ERR_MAIL_TARGET_NOT_FOUND or arg1 == m.api.ERR_MAIL_REACHED_CAP) then
-    m.sendmail_sending = false
-    m.sendmail_state = nil
-    m.api.ClearCursor()
-    m.orig.ClickSendMailItemButton()
-    m.api.ClearCursor()
+  elseif m.sendmail_sending then
+    m.sendmail_abort()
   end
 end
 
 function TurtleMail.ADDON_LOADED()
   if arg1 ~= "TurtleMail" then return end
+
+  -- Migrate old log structure to daily partitions if needed
+  m.log.migrate()
+
+  -- Auto prune old logs if retention policy configured
+  if m.api.TurtleMail_Log[ "Settings" ] and m.api.TurtleMail_Log[ "Settings" ].RetentionDays and m.api.TurtleMail_Log[ "Settings" ].RetentionDays > 0 then
+    m.log.prune( m.api.TurtleMail_Log[ "Settings" ].RetentionDays )
+  end
 
   local version = m.api.GetAddOnMetadata( "TurtleMail", "Version" )
   m.info( string.format( "Loaded (|cffeda55fv%s|r).", version ) )
@@ -292,6 +343,9 @@ function TurtleMail.MAIL_SEND_SUCCESS()
   end
   if m.sendmail_sending then
     m.sendmail_update = true
+  else
+    m.sendmail_state = nil
+    m.sendmail_unlock_bags()
   end
 end
 
@@ -423,7 +477,6 @@ function TurtleMail.inbox_open( i, manual )
 
   if (read and not has_item) or manual then
     if money > 0 then
-      m.update_money( money )
       m.received_money = money
     end
     if money == 0 or manual then
@@ -914,23 +967,49 @@ function TurtleMail.sendmail_load()
   end
 end
 
+function TurtleMail.sendmail_abort()
+  m.sendmail_sending = false
+  m.sendmail_state = nil
+  m.sendmail_timer = 0
+  m.api.ClearCursor()
+  m.orig.ClickSendMailItemButton()
+  m.api.ClearCursor()
+  m.sendmail_unlock_bags()
+  if m.api.MailFrame:IsVisible() then
+    m.api.SendMailFrame_Update()
+  end
+end
+
+function TurtleMail.sendmail_unlock_bags()
+  for i = 1, 13 do
+    local frame = m.api[ "ContainerFrame" .. i ]
+    if frame and frame:IsVisible() then
+      m.api.ContainerFrame_Update( frame )
+    end
+  end
+end
+
 --@param bag number
 --@param slot number
 function TurtleMail.sendmail_attached( bag, slot )
   if not m.api.MailFrame:IsVisible() then return false end
+  local texture = m.api.GetContainerItemInfo( bag, slot )
+  if not texture then return false end
+
   for i = 1, ATTACHMENTS_MAX do
     local btn = m.api[ "MailAttachment" .. i ]
     if btn.item and btn.item[ 1 ] == bag and btn.item[ 2 ] == slot then
       return true
     end
   end
-  if m.sendmail_state then
-    for _, attachment in m.sendmail_state.attachments do
+  if m.sendmail_state and m.sendmail_state.attachments then
+    for _, attachment in ipairs( m.sendmail_state.attachments ) do
       if attachment[ 1 ] == bag and attachment[ 2 ] == slot then
         return true
       end
     end
   end
+  return false
 end
 
 function TurtleMail.attachment_button_on_click()
@@ -947,13 +1026,13 @@ end
 
 function TurtleMail.sendmail_remove_attachment( item )
   if not item then return end
-  if type( item ) == "table" and m.sendmail_attached( item[ 1 ], item[ 2 ] ) then
+  if type( item ) == "table" then
     for i = 1, ATTACHMENTS_MAX do
       local btn = m.api[ "MailAttachment" .. i ]
       if btn.item and btn.item[ 1 ] == item[ 1 ] and btn.item[ 2 ] == item[ 2 ] then
-        m.api[ "MailAttachment" .. i ].item = nil
-        m.orig.PickupContainerItem( unpack( item ) )
+        btn.item = nil
         m.api.ClearCursor()
+        m.sendmail_unlock_bags()
         m.api.SendMailFrame_Update()
         return
       end
@@ -1019,16 +1098,10 @@ function TurtleMail.sendmail_attachments()
 end
 
 function TurtleMail.sendmail_clear()
-  local anyItem
   for i = 1, ATTACHMENTS_MAX do
-    anyItem = anyItem or m.api[ "MailAttachment" .. i ].item
     m.api[ "MailAttachment" .. i ].item = nil
   end
-  if anyItem then
-    m.api.ClearCursor()
-    m.api.PickupContainerItem( unpack( anyItem ) )
-    m.api.ClearCursor()
-  end
+  m.api.ClearCursor()
   MailMailButton:Disable()
   m.api.SendMailNameEditBox:SetText ""
   m.api.SendMailNameEditBox:SetFocus()
@@ -1036,11 +1109,16 @@ function TurtleMail.sendmail_clear()
   m.api.SendMailBodyEditBox:SetText ""
   m.api.MoneyInputFrame_ResetMoney( m.api.SendMailMoney )
   m.api.SendMailRadioButton_OnClick( 1 )
-
+  m.sendmail_unlock_bags()
   m.api.SendMailFrame_Update()
 end
 
 function TurtleMail.sendmail_send()
+  if not m.sendmail_state then
+    m.sendmail_sending = false
+    return
+  end
+
   local item = table.remove( m.sendmail_state.attachments, 1 )
   if item then
     m.api.ClearCursor()
@@ -1051,6 +1129,7 @@ function TurtleMail.sendmail_send()
 
     if not m.api.GetSendMailItem() then
       m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473TurtleMail|r: " .. m.api.ERROR_CAPS, 1, 0, 0 )
+      m.sendmail_abort()
       return
     end
   end
@@ -1265,7 +1344,11 @@ function TurtleMail.log.load()
   end )
 
   m.api.TurtleMailLogPlayersDropDown:SetScale( 0.9 )
-  m.api.UIDropDownMenu_SetText( "All players", m.api.TurtleMailLogPlayersDropDown )
+  m.api.UIDropDownMenu_SetText( L[ "All players" ], m.api.TurtleMailLogPlayersDropDown )
+
+  if m.api.TurtleMailLogClearButton then
+    m.api.TurtleMailLogClearButton:SetText( L[ "Clear..." ] )
+  end
 
   m.dropdown_filters = m.api.CreateFrame( "Frame", "TurtleMailDropDownFilters" )
   m.dropdown_filters.displayMode = "MENU"
@@ -1273,31 +1356,122 @@ function TurtleMail.log.load()
 end
 
 function TurtleMail.log.players_dropdown_on_load()
-  m.api.UIDropDownMenu_Initialize( m.api.TurtleMailLogPlayersDropDown, function()
-    local info = {}
-    info.notCheckable = 1
-    info.text = "All players"
+  m.dropdown_players = m.dropdown_players or m.api.CreateFrame( "Frame", "TurtleMailLogPlayersDropDownMenu", nil, "UIDropDownMenuTemplate" )
+  m.dropdown_players.initialize = m.log.players_menu
+  m.dropdown_players.displayMode = "MENU"
+
+  m.api.UIDropDownMenu_SetSelectedID( m.api.TurtleMailLogPlayersDropDown, 1 )
+  m.api.UIDropDownMenu_SetWidth( 85, m.api.TurtleMailLogPlayersDropDown )
+  m.api.UIDropDownMenu_SetButtonWidth( 100, m.api.TurtleMailLogPlayersDropDown )
+  m.api.UIDropDownMenu_JustifyText( "LEFT", m.api.TurtleMailLogPlayersDropDown )
+  m.api.UIDropDownMenu_SetText( L[ "All players" ], m.api.TurtleMailLogPlayersDropDown )
+
+  TurtleMailLogPlayersDropDownButton:SetScript( "OnClick", function()
+    if m.dropdown_players.initialize ~= TurtleMail.log.players_menu then
+      m.api.CloseDropDownMenus()
+      m.dropdown_players.initialize = TurtleMail.log.players_menu
+    end
+    m.api.ToggleDropDownMenu( 1, nil, m.dropdown_players, this:GetName(), 0, 0 )
+  end )
+end
+
+function TurtleMail.log.players_menu( level )
+  level = level or 1
+  local info = {}
+  info.notCheckable = 1
+
+  if level == 1 then
+    info.text = L[ "All players" ]
     info.arg1 = info.text
     info.arg2 = "All"
     info.func = m.log.select_player
-    m.api.UIDropDownMenu_AddButton( info )
+    m.api.UIDropDownMenu_AddButton( info, 1 )
 
     if not m.current_log_type then return end
 
     local players = {}
-    for _, v in ipairs( m.api.TurtleMail_Log[ m.current_log_type ] ) do
-      if v then
-        players[ v.participant ] = players[ v.participant ] and players[ v.participant ] + 1 or 1
+    if m.api.TurtleMail_Log.Days then
+      for _, day_data in pairs( m.api.TurtleMail_Log.Days ) do
+        local list = day_data[ m.current_log_type ]
+        if list then
+          for _, v in ipairs( list ) do
+            if v and v.participant and v.participant ~= "" then
+              players[ v.participant ] = (players[ v.participant ] or 0) + 1
+            end
+          end
+        end
       end
     end
 
-    for player, count in pairs( players ) do
-      info.text = player .. " (" .. count .. ")"
-      info.arg1 = player
-      info.arg2 = nil
-      m.api.UIDropDownMenu_AddButton( info )
+    local sorted_names = {}
+    for player in pairs( players ) do
+      table.insert( sorted_names, player )
     end
-  end )
+    table.sort( sorted_names, function( a, b )
+      return string.lower( a ) < string.lower( b )
+    end )
+
+    if getn( sorted_names ) <= 20 then
+      for _, player in ipairs( sorted_names ) do
+        info.text = player .. " (" .. players[ player ] .. ")"
+        info.arg1 = player
+        info.arg2 = nil
+        info.func = m.log.select_player
+        m.api.UIDropDownMenu_AddButton( info, 1 )
+      end
+    else
+      local GROUPS = {
+        { label = "A - D", pattern = "^[a-dA-D]" },
+        { label = "E - H", pattern = "^[e-hE-H]" },
+        { label = "I - L", pattern = "^[i-lI-L]" },
+        { label = "M - P", pattern = "^[m-pM-P]" },
+        { label = "Q - T", pattern = "^[q-tQ-T]" },
+        { label = "U - Z", pattern = "^[u-zU-Z]" },
+        { label = "Other", pattern = "^[^a-zA-Z]" }
+      }
+
+      m.player_groups = {}
+      for _, group in ipairs( GROUPS ) do
+        m.player_groups[ group.label ] = {}
+      end
+
+      for _, player in ipairs( sorted_names ) do
+        local matched = false
+        for _, group in ipairs( GROUPS ) do
+          if string.find( player, group.pattern ) then
+            table.insert( m.player_groups[ group.label ], { name = player, count = players[ player ] } )
+            matched = true
+            break
+          end
+        end
+        if not matched then
+          table.insert( m.player_groups[ "Other" ], { name = player, count = players[ player ] } )
+        end
+      end
+
+      for _, group in ipairs( GROUPS ) do
+        local count = getn( m.player_groups[ group.label ] )
+        if count > 0 then
+          info.text = group.label .. " (" .. count .. ")"
+          info.hasArrow = 1
+          info.value = group.label
+          info.func = nil
+          m.api.UIDropDownMenu_AddButton( info, 1 )
+        end
+      end
+    end
+  elseif level == 2 then
+    local group_name = UIDROPDOWNMENU_MENU_VALUE
+    if m.player_groups and m.player_groups[ group_name ] then
+      for _, p in ipairs( m.player_groups[ group_name ] ) do
+        info.text = p.name .. " (" .. p.count .. ")"
+        info.arg1 = p.name
+        info.arg2 = nil
+        info.func = m.log.select_player
+        m.api.UIDropDownMenu_AddButton( info, 2 )
+      end
+    end
+  end
 end
 
 function TurtleMail.log.select_player( player, is_all )
@@ -1308,6 +1482,171 @@ function TurtleMail.log.select_player( player, is_all )
     m.filter_player = player
   end
   m.log.populate( m.current_log_type )
+end
+
+function TurtleMail.log.on_search_changed( text )
+  if text and text ~= "" then
+    m.search_query = string.lower( text )
+  else
+    m.search_query = nil
+  end
+  if m.api.TurtleMailLogFrame:IsVisible() then
+    m.log.populate( m.current_log_type )
+  end
+end
+
+function TurtleMail.log.item_on_enter()
+  if this.item then
+    m.api.GameTooltip:SetOwner( this, "ANCHOR_RIGHT" )
+    if type( this.item ) == "string" then
+      m.api.GameTooltip:SetText( this.item, 1, 1, 1, 1, true )
+    end
+    m.api.GameTooltip:Show()
+  end
+end
+
+function TurtleMail.log.clear_button_onclick()
+  m.dropdown_clear = m.dropdown_clear or m.api.CreateFrame( "Frame", "TurtleMailLogClearDropDownMenu", nil, "UIDropDownMenuTemplate" )
+  m.dropdown_clear.initialize = m.log.clear_menu
+  m.dropdown_clear.displayMode = "MENU"
+  m.api.ToggleDropDownMenu( 1, nil, m.dropdown_clear, this:GetName(), 0, 0 )
+end
+
+function TurtleMail.log.clear_menu()
+  local info = {}
+  info.notCheckable = 1
+
+  info.text = L[ "Prune older than 7 days" ]
+  info.func = function() m.log.prune( 7 ) end
+  m.api.UIDropDownMenu_AddButton( info )
+
+  info.text = L[ "Prune older than 14 days" ]
+  info.func = function() m.log.prune( 14 ) end
+  m.api.UIDropDownMenu_AddButton( info )
+
+  info.text = L[ "Prune older than 30 days" ]
+  info.func = function() m.log.prune( 30 ) end
+  m.api.UIDropDownMenu_AddButton( info )
+
+  info.text = L[ "Prune older than 60 days" ]
+  info.func = function() m.log.prune( 60 ) end
+  m.api.UIDropDownMenu_AddButton( info )
+
+  info.text = string.format( "%s (%s)", L[ "Clear current log" ], L[ m.current_log_type or "Received" ] )
+  info.func = function() m.log.clear( m.current_log_type or "Received" ) end
+  m.api.UIDropDownMenu_AddButton( info )
+
+  info.text = L[ "Clear ALL logs" ]
+  info.func = function() m.log.clear( "All" ) end
+  m.api.UIDropDownMenu_AddButton( info )
+end
+
+function TurtleMail.log.migrate()
+  m.api.TurtleMail_Log.Days = m.api.TurtleMail_Log.Days or {}
+  local migrated = false
+
+  for _, log_type in ipairs( { "Sent", "Received" } ) do
+    local old_list = m.api.TurtleMail_Log[ log_type ]
+    if old_list and type( old_list ) == "table" and getn( old_list ) > 0 then
+      for _, item in ipairs( old_list ) do
+        if item and item.timestamp then
+          local day_key = date( "%Y-%m-%d", item.timestamp )
+          m.api.TurtleMail_Log.Days[ day_key ] = m.api.TurtleMail_Log.Days[ day_key ] or { Sent = {}, Received = {} }
+          m.api.TurtleMail_Log.Days[ day_key ][ log_type ] = m.api.TurtleMail_Log.Days[ day_key ][ log_type ] or {}
+          table.insert( m.api.TurtleMail_Log.Days[ day_key ][ log_type ], item )
+          migrated = true
+        end
+      end
+      m.api.TurtleMail_Log[ log_type ] = {}
+    end
+  end
+
+  if migrated then
+    m.debug( "Migrated TurtleMail_Log into daily partitioned format." )
+  end
+end
+
+function TurtleMail.log.prune( days_to_keep )
+  if not days_to_keep or days_to_keep <= 0 then return end
+  if not m.api.TurtleMail_Log.Days then return end
+
+  local cutoff_time = time() - (days_to_keep * 86400)
+  local cutoff_day = date( "%Y-%m-%d", cutoff_time )
+  local count = 0
+
+  for day_key, day_data in pairs( m.api.TurtleMail_Log.Days ) do
+    if day_key < cutoff_day then
+      for _, log_type in ipairs( { "Sent", "Received" } ) do
+        if day_data[ log_type ] then
+          count = count + getn( day_data[ log_type ] )
+        end
+      end
+      m.api.TurtleMail_Log.Days[ day_key ] = nil
+    end
+  end
+
+  if count > 0 then
+    m.info( string.format( "Pruned %d log entries older than %d days.", count, days_to_keep ) )
+  else
+    m.info( string.format( "No log entries older than %d days found.", days_to_keep ) )
+  end
+
+  if m.api.TurtleMailLogFrame:IsVisible() then
+    m.log.populate( m.current_log_type )
+  end
+end
+
+function TurtleMail.log.delete_day( day_key )
+  if not day_key or not m.api.TurtleMail_Log.Days then return end
+  if m.api.TurtleMail_Log.Days[ day_key ] then
+    m.api.TurtleMail_Log.Days[ day_key ] = nil
+    m.info( string.format( "Deleted log entries for %s.", day_key ) )
+    if m.api.TurtleMailLogFrame:IsVisible() then
+      m.log.populate( m.current_log_type )
+    end
+  end
+end
+
+function TurtleMail.log.clear( log_type )
+  if not m.api.TurtleMail_Log.Days then return end
+  if log_type == "All" then
+    m.api.TurtleMail_Log.Days = {}
+    m.api.TurtleMail_Log.Sent = {}
+    m.api.TurtleMail_Log.Received = {}
+    m.info( "All mail logs have been cleared." )
+  elseif log_type == "Sent" or log_type == "Received" then
+    for _, day_data in pairs( m.api.TurtleMail_Log.Days ) do
+      day_data[ log_type ] = {}
+    end
+    m.api.TurtleMail_Log[ log_type ] = {}
+    m.info( string.format( "%s log cleared.", L[ log_type ] ) )
+  end
+  if m.api.TurtleMailLogFrame:IsVisible() then
+    m.log.populate( m.current_log_type )
+  end
+end
+
+function TurtleMail.log.get_entries( log_type, start_time, end_time )
+  local entries = {}
+  if not m.api.TurtleMail_Log.Days then
+    m.api.TurtleMail_Log.Days = {}
+  end
+
+  local day_keys = {}
+  for day_key in pairs( m.api.TurtleMail_Log.Days ) do
+    table.insert( day_keys, day_key )
+  end
+  table.sort( day_keys )
+
+  for _, day_key in ipairs( day_keys ) do
+    local day_data = m.api.TurtleMail_Log.Days[ day_key ]
+    if day_data and day_data[ log_type ] then
+      for _, item in ipairs( day_data[ log_type ] ) do
+        table.insert( entries, item )
+      end
+    end
+  end
+  return entries
 end
 
 function TurtleMail.log.filter_dropdown()
@@ -1364,7 +1703,7 @@ function TurtleMail.log.show_calendar()
     m.calendar.hide()
   else
     local text = string.gsub( this:GetName(), "Button", "Text" )
-    m.calendar.show( m.api.TurtleMail_Log[ m.current_log_type ], time(), this, function( selected_date )
+    m.calendar.show( m.api.TurtleMail_Log.Days or {}, time(), this, function( selected_date )
       local date_str = date( L[ "date_format" ], selected_date )
       m.api[ text ]:SetText( date_str )
 
@@ -1437,7 +1776,7 @@ function TurtleMail.log.add( log_type, state )
   if log_type == "Sent" then
     data.participant = state.to
     data.subject = state.sent_subject
-    if state.send_money and state.sent_money > 0 then data.money = tonumber( state.sent_money ) end
+    if state.sent_money and state.sent_money > 0 then data.money = tonumber( state.sent_money ) end
   else -- Received
     data.participant = state.from
     data.subject = state.subject
@@ -1459,7 +1798,12 @@ function TurtleMail.log.add( log_type, state )
     end
   end
 
-  table.insert( m.api.TurtleMail_Log[ log_type ], data )
+  local day_key = date( "%Y-%m-%d", data.timestamp )
+  m.api.TurtleMail_Log.Days = m.api.TurtleMail_Log.Days or {}
+  m.api.TurtleMail_Log.Days[ day_key ] = m.api.TurtleMail_Log.Days[ day_key ] or { Sent = {}, Received = {} }
+  m.api.TurtleMail_Log.Days[ day_key ][ log_type ] = m.api.TurtleMail_Log.Days[ day_key ][ log_type ] or {}
+
+  table.insert( m.api.TurtleMail_Log.Days[ day_key ][ log_type ], data )
 end
 
 ---@param log_type LogType
@@ -1472,7 +1816,8 @@ function TurtleMail.log.populate( log_type, index )
   if start_time then start_time = start_time - 43200 end
   if end_time then end_time = end_time + 43140 end
 
-  local log = m.filter( m.api.TurtleMail_Log[ log_type ], function( item )
+  local entries = m.log.get_entries( log_type, start_time, end_time )
+  local log = m.filter( entries, function( item )
     local ret =
         (filters.Money and item.money and item.money > 0 and (not item.cod or item.cod == 0) and not item.ah)
         or
@@ -1494,6 +1839,11 @@ function TurtleMail.log.populate( log_type, index )
 
     if m.filter_player then
       ret = ret and item.participant == m.filter_player
+    end
+    if m.search_query and m.search_query ~= "" then
+      local p_match = item.participant and string.find( string.lower( item.participant ), m.search_query, 1, true )
+      local s_match = item.subject and string.find( string.lower( item.subject ), m.search_query, 1, true )
+      ret = ret and (p_match or s_match)
     end
     if start_time then
       ret = ret and item.timestamp >= start_time
@@ -1680,6 +2030,13 @@ function TurtleMail.pfui_skin()
       label:SetFont( m.api.pfUI.font_default, 10 )
       label:SetPoint( "TOPLEFT", 251, -45 )
       label:SetText( L[ "Players" ] )
+
+      if m.api.TurtleMailLogClearButton then
+        m.api.pfUI.api.SkinButton( m.api.TurtleMailLogClearButton )
+      end
+      if m.api.TurtleMailLogSearchBox and m.api.pfUI.api.SkinEditBox then
+        m.api.pfUI.api.SkinEditBox( m.api.TurtleMailLogSearchBox )
+      end
     end )
   end
 end

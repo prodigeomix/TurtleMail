@@ -49,18 +49,33 @@ function M.new()
   ---@param part DatePart
   local function get_valid_dates( part )
     local valid = {}
-    for i, v in ipairs( date_data ) do
-      local year = tonumber( date( "%Y", v.timestamp ) )
-      local month = tonumber( date( "%m", v.timestamp ) )
-      local day = tonumber( date( "%d", v.timestamp ) )
+    if date_data then
+      for k, v in pairs( date_data ) do
+        local year, month, day
+        if type( k ) == "string" and string.len( k ) == 10 and string.sub( k, 5, 5 ) == "-" then
+          year = tonumber( string.sub( k, 1, 4 ) )
+          month = tonumber( string.sub( k, 6, 7 ) )
+          day = tonumber( string.sub( k, 9, 10 ) )
+        elseif type( v ) == "table" and v.timestamp then
+          year = tonumber( date( "%Y", v.timestamp ) )
+          month = tonumber( date( "%m", v.timestamp ) )
+          day = tonumber( date( "%d", v.timestamp ) )
+        end
 
-      if year and month and day then
-        if part == "Day" and year == set_year and month == set_month then
-          valid[ day ] = valid[ day ] and valid[ day ] + 1 or 1
-        elseif part == "Month" and year == set_year then
-          valid[ month ] = true
-        elseif part == "Year" then
-          valid[ year ] = true
+        if year and month and day then
+          local count = 1
+          if type( v ) == "table" and m.current_log_type and v[ m.current_log_type ] then
+            count = getn( v[ m.current_log_type ] )
+          end
+          if count > 0 then
+            if part == "Day" and year == set_year and month == set_month then
+              valid[ day ] = (valid[ day ] or 0) + count
+            elseif part == "Month" and year == set_year then
+              valid[ month ] = true
+            elseif part == "Year" then
+              valid[ year ] = true
+            end
+          end
         end
       end
     end
@@ -170,9 +185,14 @@ function M.new()
 
     m.api.UIDropDownMenu_Initialize( dropdown, function()
       local valid_dates = get_valid_dates( name )
-      local info = {}
-
+      local sorted_keys = {}
       for i in pairs( valid_dates ) do
+        table.insert( sorted_keys, i )
+      end
+      table.sort( sorted_keys )
+
+      local info = {}
+      for _, i in ipairs( sorted_keys ) do
         info.arg1 = i
         info.arg2 = name == "Month" and months[ i ] or i
         info.value = info.arg1

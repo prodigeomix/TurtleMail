@@ -408,7 +408,7 @@
 			</Layer>
 		</Layers>
 		<Frames>
-			<Frame name="$parentIcon">
+			<Frame name="$parentIcon" enableMouse="true">
 				<Size>
 					<AbsDimension x="28" y="28"/>
 				</Size>
@@ -435,6 +435,14 @@
 						</Texture>
 					</Layer>
 				</Layers>
+				<Scripts>
+					<OnEnter>
+						TurtleMail.log.item_on_enter()
+					</OnEnter>
+					<OnLeave>
+						GameTooltip:Hide()
+					</OnLeave>
+				</Scripts>
 			</Frame>
 		</Frames>
 	</Frame>
@@ -477,12 +485,12 @@
 		<Frames>
 			<Button name="TurtleMailLogFiltersButton" inherits="UIPanelButtonTemplate" text="Filters">
 				<Size>
-					<AbsDimension x="70" y="22"/>
+					<AbsDimension x="65" y="22"/>
 				</Size>
 				<Anchors>
 					<Anchor point="TOPLEFT">
 						<Offset>
-							<AbsDimension x="75" y="-70"/>
+							<AbsDimension x="23" y="-70"/>
 						</Offset>
 					</Anchor>
 				</Anchors>
@@ -500,7 +508,7 @@
 							<Anchors>
 								<Anchor point="RIGHT">
 								<Offset>
-									<AbsDimension x="-8" y="-1"/>
+									<AbsDimension x="-6" y="-1"/>
 								</Offset>
 								</Anchor>
 							</Anchors>							
@@ -508,6 +516,30 @@
 					</Layer>
 				</Layers>
 			</Button>
+
+			<EditBox name="TurtleMailLogSearchBox" autoFocus="false" inherits="InputBoxTemplate">
+				<Size>
+					<AbsDimension x="95" y="20"/>
+				</Size>
+				<Anchors>
+					<Anchor point="TOPLEFT">
+						<Offset>
+							<AbsDimension x="94" y="-71"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+				<Scripts>
+					<OnTextChanged>
+						TurtleMail.log.on_search_changed( this:GetText() )
+					</OnTextChanged>
+					<OnEscapePressed>
+						this:ClearFocus()
+					</OnEscapePressed>
+					<OnEnterPressed>
+						this:ClearFocus()
+					</OnEnterPressed>
+				</Scripts>
+			</EditBox>
 
 			<Button name="TurtleMailLogStartTime">
 				<Size>
@@ -746,7 +778,7 @@
 				<Anchors>
 					<Anchor point="TOPLEFT">
 						<Offset>
-							<AbsDimension x="231" y="-75"/>
+							<AbsDimension x="195" y="-75"/>
 						</Offset>
 					</Anchor>
 				</Anchors>
@@ -795,6 +827,23 @@
 					<Frame name="TurtleMailLogItem10" parent="TurtleMailLogEntriesFrame" inherits="TurtleMailLogItemTemplate"/>
 				</Frames>
 			</Frame>
+			<Button name="TurtleMailLogClearButton" inherits="UIPanelButtonTemplate" text="Clear...">
+				<Size>
+					<AbsDimension x="65" y="22"/>
+				</Size>
+				<Anchors>
+					<Anchor point="BOTTOMLEFT" relativePoint="BOTTOMLEFT">
+						<Offset>
+							<AbsDimension x="23" y="80"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+				<Scripts>
+					<OnClick>
+						TurtleMail.log.clear_button_onclick()
+					</OnClick>
+				</Scripts>
+			</Button>
 			<Button name="TurtleMailLogSentButton" inherits="UIPanelButtonTemplate" text="Sent">
 				<Size>
 					<AbsDimension x="80" y="22"/>
