@@ -141,7 +141,7 @@ function TurtleMail.on_update()
 
   if m.inbox_opening then
     m.inbox_timer = (m.inbox_timer or 0) + 1
-    if m.inbox_timer > 200 then
+    if m.inbox_timer > 600 then
       m.inbox_abort()
       m.info( L[ "Opening mail timed out." ] )
     end
@@ -362,6 +362,7 @@ end
 
 function TurtleMail.MAIL_INBOX_UPDATE()
   if m.inbox_opening then
+    m.inbox_timer = 0  -- reset timeout: server responded, we're making progress
     m.inbox_update = true
   end
 
