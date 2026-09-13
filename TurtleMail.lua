@@ -13,7 +13,10 @@ local INBOX_AUCTIONHOUSES = {
   [ "Stormwind Auction House" ] = true,
   [ "Alliance Auction House" ] = true,
   [ "Darnassus Auction House" ] = true,
+  [ "Ironforge Auction House" ] = true,
+  [ "Orgrimmar Auction House" ] = true,
   [ "Undercity Auction House" ] = true,
+  [ "Thunder Bluff Auction House" ] = true,
   [ "Thunder Bluff  Auction House" ] = true,
   [ "Horde Auction House" ] = true,
   [ "Blackwater Auction House" ] = true,
@@ -47,7 +50,7 @@ function TurtleMail:init()
     Sent = {},
     Received = {},
     Settings = {
-      Enabled = false,
+      Enabled = true,
       RetentionDays = 30,
       SentFilters = { Money = 1, COD = 1, Other = 1 },
       ReceivedFilters = { Money = 1, COD = 1, Other = 1, Returned = 1, AH = 1, AHSold = 1, AHOutbid = 1, AHWon = 1, AHCancelled = 1, AHExpired = 1 }
@@ -274,11 +277,20 @@ end
 function TurtleMail.ADDON_LOADED()
   if arg1 ~= "TurtleMail" then return end
 
+  -- Ensure Settings table exists
+  m.api.TurtleMail_Log[ "Settings" ] = m.api.TurtleMail_Log[ "Settings" ] or {}
+
   -- Migrate old log structure to daily partitions if needed
   m.log.migrate()
 
+  -- Pre-enable logging by default on first install or upgrade from older versions
+  if m.api.TurtleMail_Log[ "Settings" ].Enabled == nil or not m.api.TurtleMail_Log[ "Settings" ].initialized then
+    m.api.TurtleMail_Log[ "Settings" ].Enabled = true
+    m.api.TurtleMail_Log[ "Settings" ].initialized = true
+  end
+
   -- Auto prune old logs if retention policy configured
-  if m.api.TurtleMail_Log[ "Settings" ] and m.api.TurtleMail_Log[ "Settings" ].RetentionDays and m.api.TurtleMail_Log[ "Settings" ].RetentionDays > 0 then
+  if m.api.TurtleMail_Log[ "Settings" ].RetentionDays and m.api.TurtleMail_Log[ "Settings" ].RetentionDays > 0 then
     m.log.prune( m.api.TurtleMail_Log[ "Settings" ].RetentionDays )
   end
 
@@ -287,7 +299,6 @@ function TurtleMail.ADDON_LOADED()
 
   if not m.api.TurtleMail_Log[ "Settings" ].first_run then
     m.api.TurtleMail_Log[ "Settings" ].first_run = version
-    m.info( "New in |cffeda55fv1.4|r: Enable logging with |cffabd473/tm log|r" )
   end
 
   if m.api.UIPanelWindows[ "MailFrame" ] then
