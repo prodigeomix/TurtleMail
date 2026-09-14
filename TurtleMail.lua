@@ -131,7 +131,7 @@ function TurtleMail.on_update()
 
   if m.sendmail_sending then
     m.sendmail_timer = (m.sendmail_timer or 0) + 1
-    if m.sendmail_timer > 150 then
+    if m.sendmail_timer > 300 then
       m.sendmail_abort()
       m.info( L[ "Sending mail timed out. Cancelled." ] )
     end
@@ -278,6 +278,7 @@ function TurtleMail.ADDON_LOADED()
   if arg1 ~= "TurtleMail" then return end
 
   -- Ensure Settings table exists
+  m.api.TurtleMail_Log = m.api.TurtleMail_Log or { Days = {}, Sent = {}, Received = {}, Settings = {} }
   m.api.TurtleMail_Log[ "Settings" ] = m.api.TurtleMail_Log[ "Settings" ] or {}
 
   -- Migrate old log structure to daily partitions if needed
@@ -353,6 +354,7 @@ function TurtleMail.MAIL_SEND_SUCCESS()
     m.add_auto_complete_name( m.sendmail_state.to )
   end
   if m.sendmail_sending then
+    m.sendmail_timer = 0  -- reset timeout: server responded, we're making progress
     m.sendmail_update = true
   else
     m.sendmail_state = nil
