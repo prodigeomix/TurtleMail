@@ -1,9 +1,11 @@
 TurtleMail = TurtleMail or {}
-L = TurtleMail.L
+local L = TurtleMail.L
 
 local m = TurtleMail
 local getn = table.getn ---@diagnostic disable-line: deprecated
 local function pack( ... ) return arg end
+
+local MailMailButton, MailSubjectEditBox
 
 local ATTACHMENTS_MAX = 21
 local ATTACHMENTS_PER_ROW_SEND = 7
@@ -426,7 +428,10 @@ function TurtleMail.set_cod_text()
 
   --if not m.api.pfUI or not m.api.pfUI.version then
   if not m.pfui_skin_enabled then
-    text = string.match( text, "^(.-)%s+%S+$" )
+    local _, _, match = string.find( text, "^(.-)%s+%S+$" )
+    if match then
+      text = match
+    end
   end
 
   if m.api.SendMailCODAllButton:GetChecked() then

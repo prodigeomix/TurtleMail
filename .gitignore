@@ -1,0 +1,11 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# OS metadata
+Thumbs.db
+.DS_Store
+
+# Temporary artifacts
+*.zip
+*.bak
