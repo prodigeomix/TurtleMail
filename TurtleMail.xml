@@ -220,7 +220,7 @@
 		<Scripts>
 			<OnEnter>
 				GameTooltip:SetOwner( this, "ANCHOR_RIGHT" );
-				GameTooltip:SetText( L[ "This mail was returned to you." ] );
+				GameTooltip:SetText( TurtleMail.L[ "This mail was returned to you." ] );
 			</OnEnter>
 			<OnLeave>
 				GameTooltip:Hide();
@@ -266,7 +266,7 @@
 		<Scripts>
 			<OnEnter>
 				GameTooltip:SetOwner(this, "ANCHOR_RIGHT");
-				GameTooltip:SetText( L[ "This mail was sent by an auctionhouse." ] );
+				GameTooltip:SetText( TurtleMail.L[ "This mail was sent by an auctionhouse." ] );
 			</OnEnter>
 			<OnLeave>
 				GameTooltip:Hide();
