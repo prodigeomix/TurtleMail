@@ -1,0 +1,37 @@
+name: Package Addon
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: TurtleMail
+
+      - name: Create Release Zip
+        run: |
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          rm -rf TurtleMail/.git TurtleMail/.github TurtleMail/tools TurtleMail/tests TurtleMail/__pycache__
+          rm -f TurtleMail/*.py TurtleMail/.gitignore TurtleMail/.editorconfig TurtleMail/.luarc.json TurtleMail/.gitattributes
+          rm -f TurtleMail/HANDOFF.md TurtleMail/AGENTS.md
+          zip -r TurtleMail.zip TurtleMail
+          zip -r "TurtleMail-${TAG_NAME}.zip" TurtleMail
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            TurtleMail.zip
+            TurtleMail-*.zip
+          generate_release_notes: true
